@@ -50,6 +50,7 @@ class Settings:
     temperature: float
     max_tokens: int
     history_size: int
+    history_max_chars: int
     group_reply_chance: float
     request_timeout: int
     bot_name_aliases: tuple[str, ...]
@@ -76,7 +77,8 @@ def load_settings() -> Settings:
         xai_base_url=_env("XAI_BASE_URL", "https://api.x.ai/v1"),
         temperature=_env_float("XAI_TEMPERATURE", 0.95),
         max_tokens=_env_int("XAI_MAX_TOKENS", 500),
-        history_size=_env_int("HISTORY_SIZE", 12),
+        history_size=_env_int("HISTORY_SIZE", 100),
+        history_max_chars=_env_int("HISTORY_MAX_CHARS", 700),
         group_reply_chance=_env_float("GROUP_REPLY_CHANCE", 0.05),
         request_timeout=_env_int("REQUEST_TIMEOUT", 60),
         bot_name_aliases=aliases,

@@ -127,15 +127,23 @@ class GrokClient:
         self,
         *,
         instructions: str,
-        user_input: str,
+        conversation: list[dict[str, str]] | None = None,
+        user_input: str | None = None,
         temperature: float = 0.9,
         max_output_tokens: int = 700,
     ) -> str:
-        """Responses API + server-side web_search. Без истории чата."""
+        """Responses API + server-side web_search. Может получить историю чата."""
+        if conversation:
+            input_msgs = conversation
+        elif user_input:
+            input_msgs = [{"role": "user", "content": user_input}]
+        else:
+            raise GrokError("respond_with_web_search: нужен conversation или user_input")
+
         payload: dict[str, Any] = {
             "model": self._model,
             "instructions": instructions,
-            "input": [{"role": "user", "content": user_input}],
+            "input": input_msgs,
             "tools": [{"type": "web_search"}],
             "temperature": temperature,
             "max_output_tokens": max_output_tokens,

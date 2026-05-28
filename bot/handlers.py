@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import random
-from collections import defaultdict, deque
+from collections import deque
 from typing import Deque
 
 from telegram import Update
@@ -36,9 +36,43 @@ from .search import search_web
 logger = logging.getLogger(__name__)
 
 
-# История диалогов на чат (последние N сообщений в формате xAI chat-completions).
-# Ключ — (chat_id, user_id?) — здесь только chat_id, в личке = id юзера.
-_history: dict[int, Deque[dict[str, str]]] = defaultdict(lambda: deque(maxlen=24))
+# История диалогов на чат. Размер буфера = settings.history_size (по умолчанию 100).
+_history: dict[int, Deque[dict[str, str]]] = {}
+
+
+def _get_history(chat_id: int, max_size: int) -> Deque[dict[str, str]]:
+    dq = _history.get(chat_id)
+    if dq is None:
+        dq = deque(maxlen=max_size)
+        _history[chat_id] = dq
+    elif dq.maxlen != max_size:
+        dq = deque(list(dq)[-max_size:], maxlen=max_size)
+        _history[chat_id] = dq
+    return dq
+
+
+def _trim_for_context(
+    messages: list[dict[str, str]],
+    *,
+    max_messages: int,
+    max_chars: int,
+) -> list[dict[str, str]]:
+    """Обрезает историю до лимита сообщений и длины каждой реплики."""
+    return [
+        {"role": m["role"], "content": m["content"][:max_chars]}
+        for m in messages[-max_messages:]
+    ]
+
+
+def _few_shot_count(history_len: int) -> int:
+    """Меньше эталонных пар, когда история уже длинная — экономим контекст."""
+    if history_len > 60:
+        return 4
+    if history_len > 30:
+        return 6
+    if history_len > 12:
+        return 8
+    return 10
 
 
 def _make_user_message(name: str, text: str, reply_to: str | None = None) -> str:
@@ -97,6 +131,7 @@ async def _try_search_reply(
     system_prompt: str,
     settings: Settings,
     grok: GrokClient,
+    context: list[dict[str, str]],
 ) -> str | None:
     """Пробует ответить через интернет. None — не получилось, идём в обычный чат."""
     instructions = system_prompt + WEB_SEARCH_ADDENDUM
@@ -104,7 +139,7 @@ async def _try_search_reply(
     try:
         reply = await grok.respond_with_web_search(
             instructions=instructions,
-            user_input=user_text,
+            conversation=context,
             temperature=settings.temperature,
             max_output_tokens=settings.web_search_max_tokens,
         )
@@ -122,10 +157,10 @@ async def _try_search_reply(
         "[сводка из интернета — используй для ответа, перескажи как вомитбой]:\n"
         f"{snippets}"
     )
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": instructions},
-        {"role": "user", "content": augmented},
-    ]
+    messages: list[dict[str, str]] = [{"role": "system", "content": instructions}]
+    if len(context) > 1:
+        messages.extend(context[:-1])
+    messages.append({"role": "user", "content": augmented})
     try:
         reply = await grok.chat(
             messages,
@@ -144,23 +179,30 @@ async def _generate_reply(
     settings: Settings,
     grok: GrokClient,
 ) -> str:
-    history = _history[chat_id]
+    history = _get_history(chat_id, settings.history_size)
     history.append({"role": "user", "content": user_text})
 
     seed = random.randint(0, 10_000)
     system_prompt = build_system_prompt(seed=seed)
+    context = _trim_for_context(
+        list(history),
+        max_messages=settings.history_size,
+        max_chars=settings.history_max_chars,
+    )
 
     if settings.web_search_enabled and needs_web_search(user_text):
         search_reply = await _try_search_reply(
-            user_text, system_prompt, settings, grok
+            user_text, system_prompt, settings, grok, context
         )
         if search_reply:
             history.append({"role": "assistant", "content": search_reply})
             return search_reply
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    messages.extend(sample_dialogue_examples(seed=seed, n=12))
-    messages.extend(list(history)[-settings.history_size :])
+    messages.extend(
+        sample_dialogue_examples(seed=seed, n=_few_shot_count(len(context)))
+    )
+    messages.extend(context)
 
     try:
         reply = await grok.chat(
