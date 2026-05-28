@@ -19,7 +19,8 @@ from telegram.ext import (
 
 from .config import Settings
 from .grok_client import GrokClient, GrokError
-from .persona import build_system_prompt, sample_dialogue_examples
+from .lore import compose_lore_reply
+from .persona import build_system_prompt, sample_dialogue_examples, strip_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -109,27 +110,45 @@ async def _generate_reply(
             [
                 "я и кто.",
                 "нямк.",
-                "🤤",
                 "че.",
-                "помойка молчит.🌟",
+                "помойка молчит.",
                 "мышки мышки мышки мышки.",
             ]
         )
 
+    reply = strip_emoji(reply) or "и что."
     history.append({"role": "assistant", "content": reply})
     return reply
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "я и кто.\n\nпиши что хотел🌟"
-    )
+    await update.effective_message.reply_text("я и кто.\n\nпиши что хотел.")
 
 
 async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     _history.pop(chat_id, None)
-    await update.effective_message.reply_text("забыл всё нахуй.🌟")
+    await update.effective_message.reply_text("забыл всё нахуй.")
+
+
+async def handle_lore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings: Settings = context.application.bot_data["settings"]
+    grok: GrokClient = context.application.bot_data["grok"]
+
+    await _send_typing(update, context)
+
+    try:
+        reply = await compose_lore_reply(
+            grok,
+            temperature=min(settings.temperature, 0.9),
+            max_tokens=settings.max_tokens,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Ошибка в /lore: %s", exc)
+        reply = "лор сегодня недоступен. помойка не на связи."
+
+    reply = strip_emoji(reply) or "лор сегодня недоступен."
+    await update.effective_message.reply_text(reply)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -171,6 +190,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CommandHandler("reset", handle_reset))
+    app.add_handler(CommandHandler("lore", handle_lore))
 
     app.add_handler(
         MessageHandler(

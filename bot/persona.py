@@ -4,9 +4,37 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from pathlib import Path
 
 from .config import CORPUS_PATH
+
+
+# Регэксп для удаления эмодзи. Покрывает основные Unicode-блоки эмодзи
+# плюс модификаторы (variation selector, zero-width joiner, skin tone).
+EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FFFF"
+    "\U00002600-\U000027BF"
+    "\U00002300-\U000023FF"
+    "\U00002B00-\U00002BFF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U0000FE0F"
+    "\U0000200D"
+    "\U0001F3FB-\U0001F3FF"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def strip_emoji(text: str) -> str:
+    """Убирает все эмодзи из текста и нормализует пробелы."""
+    if not text:
+        return text
+    cleaned = EMOJI_RE.sub("", text)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned)
+    return cleaned.strip()
 
 
 # Эталонные диалоги, размеченные вручную автором канала.
@@ -81,9 +109,9 @@ PERSONA_SYSTEM_PROMPT = """\
 - Точки чаще, чем нужно. Запятые опускаешь. Слова сокращаешь («ниче», «тока», «шас», «ваще»).
 - Любишь обрывать фразу в воздухе: «я и кто.», «привет. что», «оцените.», «нямк», «делишес готов.»
 - Маты — органичная часть речи: «блядь», «нахуй», «пиздец», «ебать», «хуй». Не пытайся их прятать.
-- Стилистическая фишка — звёздочка-эмодзи 🌟 в конце фраз и абзацев, иногда 🤮🤤👀😈🌭⚡️🩸🐭.
-- Не используешь смайлы из «нормальной» интернет-культуры: никаких «:)», «))», «ха-ха», «😊» в позитивном смысле.
-- В длинных постах любишь начинать с «✍️» и заканчивать риторическим выпадом.
+- НИКАКИХ эмодзи в ответах. Вообще. Ни 🌟, ни 🤮, ни ❤️, ни 😈, ни смайликов вроде «:)», «))», «ха-ха».
+  Старые посты канала ими были засеяны, но в чате ты пишешь БЕЗ ЭМОДЗИ. Любой эмодзи в твоём ответе — баг.
+- Если хочется акцента — ставь точку, мат или просто оборванное «.». Без визуальных украшений.
 
 ТЕМЫ, КОТОРЫЕ ТЫ ОБСАСЫВАЕШЬ:
 - помойка, мусор, дохлые голуби, мышки, клей, гнильца — твоя гастрономия.
@@ -127,11 +155,21 @@ def _load_corpus() -> list[dict]:
 
 
 def _short_messages(max_len: int = 220) -> list[str]:
-    return [m["text"] for m in _load_corpus() if 3 <= len(m["text"]) <= max_len]
+    out: list[str] = []
+    for m in _load_corpus():
+        cleaned = strip_emoji(m["text"])
+        if 3 <= len(cleaned) <= max_len:
+            out.append(cleaned)
+    return out
 
 
 def _long_messages(min_len: int = 250, max_len: int = 900) -> list[str]:
-    return [m["text"] for m in _load_corpus() if min_len <= len(m["text"]) <= max_len]
+    out: list[str] = []
+    for m in _load_corpus():
+        cleaned = strip_emoji(m["text"])
+        if min_len <= len(cleaned) <= max_len:
+            out.append(cleaned)
+    return out
 
 
 def sample_dialogue_examples(

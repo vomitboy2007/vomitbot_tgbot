@@ -10,11 +10,19 @@ import threading
 from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder
 
 from .config import load_settings
 from .grok_client import GrokClient
 from .handlers import register_handlers
+
+
+BOT_COMMANDS: list[BotCommand] = [
+    BotCommand("lore", "интересная инфа по лору"),
+    BotCommand("reset", "забыть контекст диалога"),
+    BotCommand("start", "представиться"),
+]
 
 
 def _setup_logging(level: str) -> None:
@@ -85,6 +93,12 @@ async def _amain() -> None:
     bot_username = me.username or ""
     application.bot_data["bot_username"] = bot_username
     logger.info("Бот авторизован как @%s (%s)", bot_username, me.id)
+
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+        logger.info("Команды бота зарегистрированы: %s", [c.command for c in BOT_COMMANDS])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Не удалось зарегистрировать команды: %s", exc)
 
     health_server = _start_health_server(settings.health_port)
 
