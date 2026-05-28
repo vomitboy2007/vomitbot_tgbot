@@ -19,7 +19,7 @@ from telegram.ext import (
 
 from .config import Settings
 from .grok_client import GrokClient, GrokError
-from .persona import build_system_prompt
+from .persona import build_system_prompt, sample_dialogue_examples
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +89,11 @@ async def _generate_reply(
     history = _history[chat_id]
     history.append({"role": "user", "content": user_text})
 
-    system_prompt = build_system_prompt(seed=random.randint(0, 10_000))
+    seed = random.randint(0, 10_000)
+    system_prompt = build_system_prompt(seed=seed)
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(sample_dialogue_examples(seed=seed, n=12))
     messages.extend(list(history)[-settings.history_size :])
 
     try:
