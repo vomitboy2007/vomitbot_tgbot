@@ -19,7 +19,7 @@ from telegram.ext import (
 
 from .config import Settings
 from .grok_client import GrokClient, GrokError
-from .lore import compose_lore_reply
+from .lore import LORE_SITE_URL, compose_lore_reply
 from .persona import build_system_prompt, sample_dialogue_examples, strip_emoji
 
 logger = logging.getLogger(__name__)
@@ -132,23 +132,11 @@ async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_lore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    grok: GrokClient = context.application.bot_data["grok"]
-
-    await _send_typing(update, context)
-
-    try:
-        reply = await compose_lore_reply(
-            grok,
-            temperature=min(settings.temperature, 0.9),
-            max_tokens=settings.max_tokens,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Ошибка в /lore: %s", exc)
-        reply = "лор сегодня недоступен. помойка не на связи."
-
-    reply = strip_emoji(reply) or "лор сегодня недоступен."
-    await update.effective_message.reply_text(reply)
+    reply = strip_emoji(compose_lore_reply()) or f"лор сегодня недоступен. {LORE_SITE_URL}"
+    await update.effective_message.reply_text(
+        reply,
+        disable_web_page_preview=False,
+    )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
