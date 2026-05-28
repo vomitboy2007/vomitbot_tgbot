@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS_PATH = ROOT / "data" / "persona_corpus.json"
+SITE_IMAGES_PATH = ROOT / "data" / "site_images.json"
 
 
 def _env(name: str, default: str | None = None, *, required: bool = False) -> str:

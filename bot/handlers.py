@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import random
 from collections import defaultdict, deque
 from typing import Deque
 
 from telegram import Update
-from telegram.constants import ChatAction, ChatType
+from telegram.constants import ChatAction, ChatType, ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -22,6 +23,7 @@ from .grok_client import GrokClient, GrokError
 from .guards import is_manipulation_attempt, pick_deflection
 from .lore import LORE_SITE_URL, compose_lore_reply
 from .persona import build_system_prompt, sample_dialogue_examples, strip_emoji
+from .pic import PicError, compose_pic_reply
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +142,42 @@ async def handle_lore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def handle_pic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_typing(update, context)
+
+    try:
+        art, source_url = await compose_pic_reply()
+        reply_html = (
+            "ну смотри.\n\n"
+            f"<pre>{html.escape(art)}</pre>\n\n"
+            f"источник:\n{html.escape(source_url)}"
+        )
+        if len(reply_html) > 4096:
+            trimmed = art[:3500].rstrip() + "..."
+            reply_html = (
+                "ну смотри.\n\n"
+                f"<pre>{html.escape(trimmed)}</pre>\n\n"
+                f"источник:\n{html.escape(source_url)}"
+            )
+        await update.effective_message.reply_text(
+            reply_html,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+    except PicError as exc:
+        logger.warning("Ошибка /pic: %s", exc)
+        reply = f"картинка не загрузилась. попробуй ещё раз.\n\n{LORE_SITE_URL}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Неожиданная ошибка /pic: %s", exc)
+        reply = f"помойка не отдала картинку.\n\n{LORE_SITE_URL}"
+
+    await update.effective_message.reply_text(
+        reply,
+        disable_web_page_preview=True,
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     grok: GrokClient = context.application.bot_data["grok"]
@@ -196,6 +234,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(CommandHandler("reset", handle_reset))
     app.add_handler(CommandHandler("lore", handle_lore))
+    app.add_handler(CommandHandler("pic", handle_pic))
 
     app.add_handler(
         MessageHandler(
