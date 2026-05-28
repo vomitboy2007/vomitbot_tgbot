@@ -19,6 +19,7 @@ from telegram.ext import (
 
 from .config import Settings
 from .grok_client import GrokClient, GrokError
+from .guards import is_manipulation_attempt, pick_deflection
 from .lore import LORE_SITE_URL, compose_lore_reply
 from .persona import build_system_prompt, sample_dialogue_examples, strip_emoji
 
@@ -153,6 +154,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     name = (user.full_name or user.username or "анон") if user else "анон"
 
+    chat_id = update.effective_chat.id
+
+    if is_manipulation_attempt(text):
+        logger.info(
+            "Поймана попытка манипуляции в чате %s от %s: %r",
+            chat_id,
+            name,
+            text[:160],
+        )
+        reply = pick_deflection()
+        try:
+            await message.reply_text(reply, reply_to_message_id=message.message_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reply_to не прошёл: %s", exc)
+            await context.bot.send_message(chat_id=chat_id, text=reply)
+        return
+
     reply_to_text = None
     if message.reply_to_message:
         reply_to_text = (
@@ -165,7 +183,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await _send_typing(update, context)
 
-    chat_id = update.effective_chat.id
     reply = await _generate_reply(chat_id, user_payload, settings, grok)
 
     try:
