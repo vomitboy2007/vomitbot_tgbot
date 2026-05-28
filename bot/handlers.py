@@ -10,6 +10,7 @@ from typing import Deque
 
 from telegram import Update
 from telegram.constants import ChatAction, ChatType, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -23,7 +24,7 @@ from .grok_client import GrokClient, GrokError
 from .guards import is_manipulation_attempt, pick_deflection
 from .lore import LORE_SITE_URL, compose_lore_reply
 from .persona import build_system_prompt, sample_dialogue_examples, strip_emoji
-from .pic import PicError, compose_pic_reply
+from .pic import PicError, compose_pic_reply, format_pic_message
 
 logger = logging.getLogger(__name__)
 
@@ -146,25 +147,31 @@ async def handle_pic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _send_typing(update, context)
 
     try:
-        art, source_url = await compose_pic_reply()
+        art, source_label = compose_pic_reply()
+        pre_body = html.escape(art)
+        if len(pre_body) > 3400:
+            pre_body = html.escape(art[:3400].rstrip()) + "..."
+
         reply_html = (
             "ну смотри.\n\n"
-            f"<pre>{html.escape(art)}</pre>\n\n"
-            f"источник:\n{html.escape(source_url)}"
+            f"<pre>{pre_body}</pre>\n\n"
+            f"источник:\n{html.escape(source_label)}"
         )
-        if len(reply_html) > 4096:
-            trimmed = art[:3500].rstrip() + "..."
-            reply_html = (
-                "ну смотри.\n\n"
-                f"<pre>{html.escape(trimmed)}</pre>\n\n"
-                f"источник:\n{html.escape(source_url)}"
+
+        try:
+            await update.effective_message.reply_text(
+                reply_html,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
             )
-        await update.effective_message.reply_text(
-            reply_html,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-        return
+            return
+        except BadRequest as exc:
+            logger.warning("HTML /pic не прошёл, шлём plain: %s", exc)
+            await update.effective_message.reply_text(
+                format_pic_message(art, source_label),
+                disable_web_page_preview=True,
+            )
+            return
     except PicError as exc:
         logger.warning("Ошибка /pic: %s", exc)
         reply = f"картинка не загрузилась. попробуй ещё раз.\n\n{LORE_SITE_URL}"

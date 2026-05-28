@@ -16,12 +16,11 @@ from telegram.ext import Application, ApplicationBuilder
 from .config import load_settings
 from .grok_client import GrokClient
 from .handlers import register_handlers
-from .pic import close_pic_client
 
 
 BOT_COMMANDS: list[BotCommand] = [
     BotCommand("lore", "интересная инфа по лору"),
-    BotCommand("pic", "рандом ascii-картинка с сайта"),
+    BotCommand("pic", "рандом ascii из images/"),
     BotCommand("reset", "забыть контекст диалога"),
     BotCommand("start", "представиться"),
 ]
@@ -134,8 +133,6 @@ async def _amain() -> None:
             await application.shutdown()
         with suppress(Exception):
             await grok.close()
-        with suppress(Exception):
-            await close_pic_client()
         with suppress(Exception):
             health_server.shutdown()
             health_server.server_close()
