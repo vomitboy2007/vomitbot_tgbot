@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 from html import unescape
-from urllib.parse import quote_plus
 
 import httpx
 
@@ -21,14 +20,21 @@ TAG_RE = re.compile(r"<[^>]+>")
 
 async def search_web(query: str, *, max_results: int = 5, timeout: int = 15) -> str:
     """Возвращает текстовую выжимку результатов или пустую строку."""
-    url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; vomitbot/1.0; +https://vomitboycom.neocities.org/)",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
     }
 
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            response = await client.post(url, data={"q": query, "b": "", "kl": "ru-ru"})
+            # POST только на /html/ — query в URL ломает разметку результатов.
+            response = await client.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query, "b": "", "kl": "ru-ru"},
+            )
             response.raise_for_status()
             html = response.text
     except httpx.HTTPError as exc:

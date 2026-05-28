@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import random
+import re
 from collections import deque
 from typing import Deque
 
@@ -25,7 +26,8 @@ from .guards import is_manipulation_attempt, pick_deflection
 from .intent import extract_plain_question, needs_web_search
 from .lore import LORE_SITE_URL, compose_lore_reply
 from .persona import (
-    WEB_SEARCH_ADDENDUM,
+    FACTUAL_FALLBACK_ADDENDUM,
+    build_search_instructions,
     build_system_prompt,
     sample_dialogue_examples,
     strip_emoji,
@@ -73,6 +75,53 @@ def _few_shot_count(history_len: int) -> int:
     if history_len > 12:
         return 8
     return 10
+
+
+def _conversation_for_search(
+    context: list[dict[str, str]],
+    plain_question: str,
+    *,
+    max_turns: int = 8,
+) -> list[dict[str, str]]:
+    """Короткий контекст + чистый вопрос для web_search (без префикса [имя])."""
+    recent = context[-max_turns:] if context else []
+    if recent and recent[-1].get("role") == "user":
+        recent = recent[:-1]
+    out = list(recent)
+    out.append({"role": "user", "content": plain_question})
+    return out
+
+
+_DISMISSIVE_SEARCH_RE = re.compile(
+    r"^(?:"
+    r"хуй\s+(?:его\s+)?знает|"
+    r"хз|"
+    r"и\s+что|"
+    r"не\s+знаю|"
+    r"нямк|"
+    r"че\.?|"
+    r"угу\.?"
+    r")(?:[.!?]|$)",
+    re.I,
+)
+
+
+def _looks_dismissive(reply: str, plain_question: str) -> bool:
+    """True — модель проигнорировала фактический вопрос."""
+    text = reply.strip()
+    if len(text) > 120:
+        return False
+    if _DISMISSIVE_SEARCH_RE.match(text):
+        return True
+    # «гобзавр. хуй его знает. и что.» — короткий ответ без объяснения.
+    entity = plain_question.lower()
+    for prefix in ("кто такой ", "кто такая ", "что такое ", "что за "):
+        if entity.startswith(prefix):
+            entity = entity[len(prefix) :].strip(" ?!.,")
+            break
+    if entity and len(entity) <= 40 and entity in text.lower() and len(text) < 80:
+        return True
+    return False
 
 
 def _make_user_message(name: str, text: str, reply_to: str | None = None) -> str:
@@ -128,38 +177,43 @@ async def _send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def _try_search_reply(
     user_text: str,
-    system_prompt: str,
     settings: Settings,
     grok: GrokClient,
     context: list[dict[str, str]],
 ) -> str | None:
     """Пробует ответить через интернет. None — не получилось, идём в обычный чат."""
-    instructions = system_prompt + WEB_SEARCH_ADDENDUM
+    instructions = build_search_instructions()
+    plain = extract_plain_question(user_text)
+    search_context = _conversation_for_search(context, plain)
 
     try:
         reply = await grok.respond_with_web_search(
             instructions=instructions,
-            conversation=context,
+            conversation=search_context,
             temperature=settings.temperature,
             max_output_tokens=settings.web_search_max_tokens,
         )
-        return strip_emoji(reply) or None
+        reply = strip_emoji(reply) or ""
+        if reply and not _looks_dismissive(reply, plain):
+            return reply
+        if reply:
+            logger.info("web_search дал уклончивый ответ %r — пробуем DDG fallback", reply[:80])
     except GrokError as exc:
         logger.warning("xAI web_search не сработал: %s. Пробуем fallback.", exc)
 
-    query = extract_plain_question(user_text)
+    query = plain or user_text
     snippets = await search_web(query, timeout=min(settings.search_timeout, 20))
     if not snippets:
         return None
 
     augmented = (
-        f"{user_text}\n\n"
+        f"{plain}\n\n"
         "[сводка из интернета — используй для ответа, перескажи как вомитбой]:\n"
         f"{snippets}"
     )
     messages: list[dict[str, str]] = [{"role": "system", "content": instructions}]
-    if len(context) > 1:
-        messages.extend(context[:-1])
+    if len(search_context) > 1:
+        messages.extend(search_context[:-1])
     messages.append({"role": "user", "content": augmented})
     try:
         reply = await grok.chat(
@@ -167,7 +221,11 @@ async def _try_search_reply(
             temperature=settings.temperature,
             max_tokens=settings.web_search_max_tokens,
         )
-        return strip_emoji(reply) or None
+        reply = strip_emoji(reply) or ""
+        if reply and not _looks_dismissive(reply, plain):
+            return reply
+        logger.info("DDG fallback тоже уклончивый: %r", reply[:80])
+        return reply or None
     except GrokError as exc:
         logger.warning("Fallback chat после search упал: %s", exc)
         return None
@@ -183,21 +241,22 @@ async def _generate_reply(
     history.append({"role": "user", "content": user_text})
 
     seed = random.randint(0, 10_000)
-    system_prompt = build_system_prompt(seed=seed)
+    use_search = settings.web_search_enabled and needs_web_search(user_text)
     context = _trim_for_context(
         list(history),
         max_messages=settings.history_size,
         max_chars=settings.history_max_chars,
     )
 
-    if settings.web_search_enabled and needs_web_search(user_text):
-        search_reply = await _try_search_reply(
-            user_text, system_prompt, settings, grok, context
-        )
+    if use_search:
+        search_reply = await _try_search_reply(user_text, settings, grok, context)
         if search_reply:
             history.append({"role": "assistant", "content": search_reply})
             return search_reply
 
+    system_prompt = build_system_prompt(seed=seed)
+    if use_search:
+        system_prompt += FACTUAL_FALLBACK_ADDENDUM
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     messages.extend(
         sample_dialogue_examples(seed=seed, n=_few_shot_count(len(context)))

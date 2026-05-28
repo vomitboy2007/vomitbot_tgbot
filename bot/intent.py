@@ -35,6 +35,16 @@ QUESTION_RE = re.compile(
     re.I,
 )
 
+# «кто это», «что за X» — явный запрос сущности.
+ENTITY_QUERY_RE = re.compile(
+    r"(?:^|\s)(?:"
+    r"кто\s+(?:такой|такая|такие|это|он|она|они)"
+    r"|что\s+(?:такое|за|это|за\s+\S+)"
+    r"|расскажи\s+(?:про|о)\s+"
+    r")",
+    re.I,
+)
+
 FACTUAL_LENGTH = 28
 
 
@@ -66,6 +76,9 @@ def needs_web_search(user_payload: str) -> bool:
         return False
 
     if QUESTION_RE.search(text):
+        return True
+
+    if ENTITY_QUERY_RE.search(lowered):
         return True
 
     # Длинное сообщение без «?» — часто запрос фактов/мнения на тему.
