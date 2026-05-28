@@ -74,6 +74,7 @@ async def _amain() -> None:
         model=settings.xai_model,
         base_url=settings.xai_base_url,
         timeout=settings.request_timeout,
+        search_timeout=settings.search_timeout,
     )
 
     application: Application = (

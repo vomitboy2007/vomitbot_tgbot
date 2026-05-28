@@ -55,6 +55,9 @@ class Settings:
     bot_name_aliases: tuple[str, ...]
     log_level: str
     health_port: int
+    web_search_enabled: bool
+    web_search_max_tokens: int
+    search_timeout: int
 
 
 def load_settings() -> Settings:
@@ -79,4 +82,7 @@ def load_settings() -> Settings:
         bot_name_aliases=aliases,
         log_level=_env("LOG_LEVEL", "INFO"),
         health_port=_env_int("PORT", 8080),
+        web_search_enabled=_env("WEB_SEARCH_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
+        web_search_max_tokens=_env_int("WEB_SEARCH_MAX_TOKENS", 700),
+        search_timeout=_env_int("SEARCH_TIMEOUT", 120),
     )

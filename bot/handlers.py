@@ -22,9 +22,16 @@ from telegram.ext import (
 from .config import Settings
 from .grok_client import GrokClient, GrokError
 from .guards import is_manipulation_attempt, pick_deflection
+from .intent import extract_plain_question, needs_web_search
 from .lore import LORE_SITE_URL, compose_lore_reply
-from .persona import build_system_prompt, sample_dialogue_examples, strip_emoji
+from .persona import (
+    WEB_SEARCH_ADDENDUM,
+    build_system_prompt,
+    sample_dialogue_examples,
+    strip_emoji,
+)
 from .pic import PicError, compose_pic_reply, format_pic_message
+from .search import search_web
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +92,52 @@ async def _send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.debug("Не удалось показать typing: %s", exc)
 
 
+async def _try_search_reply(
+    user_text: str,
+    system_prompt: str,
+    settings: Settings,
+    grok: GrokClient,
+) -> str | None:
+    """Пробует ответить через интернет. None — не получилось, идём в обычный чат."""
+    instructions = system_prompt + WEB_SEARCH_ADDENDUM
+
+    try:
+        reply = await grok.respond_with_web_search(
+            instructions=instructions,
+            user_input=user_text,
+            temperature=settings.temperature,
+            max_output_tokens=settings.web_search_max_tokens,
+        )
+        return strip_emoji(reply) or None
+    except GrokError as exc:
+        logger.warning("xAI web_search не сработал: %s. Пробуем fallback.", exc)
+
+    query = extract_plain_question(user_text)
+    snippets = await search_web(query, timeout=min(settings.search_timeout, 20))
+    if not snippets:
+        return None
+
+    augmented = (
+        f"{user_text}\n\n"
+        "[сводка из интернета — используй для ответа, перескажи как вомитбой]:\n"
+        f"{snippets}"
+    )
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": instructions},
+        {"role": "user", "content": augmented},
+    ]
+    try:
+        reply = await grok.chat(
+            messages,
+            temperature=settings.temperature,
+            max_tokens=settings.web_search_max_tokens,
+        )
+        return strip_emoji(reply) or None
+    except GrokError as exc:
+        logger.warning("Fallback chat после search упал: %s", exc)
+        return None
+
+
 async def _generate_reply(
     chat_id: int,
     user_text: str,
@@ -96,6 +149,14 @@ async def _generate_reply(
 
     seed = random.randint(0, 10_000)
     system_prompt = build_system_prompt(seed=seed)
+
+    if settings.web_search_enabled and needs_web_search(user_text):
+        search_reply = await _try_search_reply(
+            user_text, system_prompt, settings, grok
+        )
+        if search_reply:
+            history.append({"role": "assistant", "content": search_reply})
+            return search_reply
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     messages.extend(sample_dialogue_examples(seed=seed, n=12))
